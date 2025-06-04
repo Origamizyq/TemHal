@@ -13,7 +13,7 @@ from transformers import set_seed
 
 from compute_correctness import compute_correctness
 from probing_utils import load_model_and_validate_gpu, tokenize, generate, LIST_OF_DATASETS, MODEL_FRIENDLY_NAMES, \
-    LIST_OF_MODELS
+    LIST_OF_MODELS,LIST_OF_MODELS_PATH
 
 
 def parse_args():
@@ -33,16 +33,16 @@ def parse_args():
 def load_data_movies(test=False):
     file_name = 'movie_qa'
     if test:
-        file_path = f'../data/{file_name}_test.csv'
+        file_path = f'data/{file_name}_test.csv'
     else: # train
-        file_path = f'../data/{file_name}_train.csv'
+        file_path = f'data/{file_name}_train.csv'
     if not os.path.exists(file_path):
         # split into train and test
-        data = pd.read_csv(f"../data/{file_name}.csv")
+        data = pd.read_csv(f"data/{file_name}.csv")
         # spit into test and train - 50% each
         train, test = train_test_split(data, train_size=10000, random_state=42)
-        train.to_csv(f"../data/{file_name}_train.csv", index=False)
-        test.to_csv(f"../data/{file_name}_test.csv", index=False)
+        train.to_csv(f"data/{file_name}_train.csv", index=False)
+        test.to_csv(f"data/{file_name}_test.csv", index=False)
 
     data = pd.read_csv(file_path)
     questions = data['Question']
@@ -51,7 +51,7 @@ def load_data_movies(test=False):
 
 
 def load_data_nli(split, data_file_names):
-    data_folder = '../data'
+    data_folder = 'data'
     if split == 'train':
         file_path = f"{data_folder}/{data_file_names['train']}.csv"
     elif split == 'test':
@@ -81,8 +81,8 @@ def load_data_mnli(split):
     return load_data_nli(split, data_file_names)
 
 def load_data_nq(split, with_context=False):
-    raw_data_folder = '../data'
-    data_folder = '../data'
+    raw_data_folder = 'data'
+    data_folder = 'data'
     file_name = 'nq_wc' # don't need special file for no context, simply don't use it
     if split == 'train':
         file_path = f'{data_folder}/{file_name}_dataset_train.csv'
@@ -109,7 +109,7 @@ def load_data_nq(split, with_context=False):
 
 
 def load_data_winogrande(split):
-    data_folder = '../data'
+    data_folder = 'data'
     if split == 'train':
         file_path = f"{data_folder}/winogrande_train.csv"
     elif split == 'test':
@@ -133,10 +133,10 @@ def load_data_winogrande(split):
 
 def load_data_triviaqa(test=False, legacy=False):
     if legacy:
-        with open('../data/verified-web-dev.json') as f:
+        with open('data/verified-web-dev.json') as f:
             data_verified = json.load(f)
             data_verified = data_verified['Data']
-        with open('../data/web-dev.json') as f:
+        with open('data/web-dev.json') as f:
             data = json.load(f)
             data = data['Data']
         questions_from_verified = [x['Question'] for x in data_verified]
@@ -156,9 +156,9 @@ def load_data_triviaqa(test=False, legacy=False):
             return [ex['Question'] for ex in data_not_verified], [ex['Answer']['Aliases'] for ex in data_not_verified]
     else:
         if test:
-            file_path = '../data/triviaqa-unfiltered/unfiltered-web-dev.json'
+            file_path = 'data/triviaqa-unfiltered/unfiltered-web-dev.json'
         else:
-            file_path = '../data/triviaqa-unfiltered/unfiltered-web-train.json'
+            file_path = 'data/triviaqa-unfiltered/unfiltered-web-train.json'
         with open(file_path) as f:
             data = json.load(f)
             data = data['Data']
@@ -167,9 +167,9 @@ def load_data_triviaqa(test=False, legacy=False):
 
 def load_data_math(test=False):
     if test:
-        data = pd.read_csv("../data/AnswerableMath_test.csv")
+        data = pd.read_csv("data/AnswerableMath_test.csv")
     else:
-        data = pd.read_csv("../data/AnswerableMath.csv")
+        data = pd.read_csv("data/AnswerableMath.csv")
 
 
     questions = data['question']
@@ -213,11 +213,11 @@ def generate_model_answers(data, model, tokenizer, device, model_name, do_sample
                                     top_p=top_p, temperature=temperature, stop_token_id=stop_token_id, tokenizer=tokenizer)
 
         answer = tokenizer.decode(model_output['sequences'][0][len(model_input[0]):])
-        if output_scores:
-            scores = torch.concatenate(model_output['scores']).cpu()  # shape = (new_tokens, len(vocab))
-            all_scores.append(scores)
-            output_ids = model_output['sequences'][0][len(model_input[0]):].cpu()
-            all_output_ids.append(output_ids)
+        # if output_scores:
+        #     scores = torch.concatenate(model_output['scores']).cpu()  # shape = (new_tokens, len(vocab))
+        #     all_scores.append(scores)
+        #     output_ids = model_output['sequences'][0][len(model_input[0]):].cpu()
+        #     all_output_ids.append(output_ids)
 
         all_textual_answers.append(answer)
         all_input_output_ids.append(model_output['sequences'][0].cpu())
@@ -235,6 +235,7 @@ def generate_model_answers(data, model, tokenizer, device, model_name, do_sample
 def init_wandb(args):
     cfg = vars(args)
     cfg['dataset'] = args.dataset
+    os.environ["WANDB_MODE"] = "offline"
     wandb.init(
         project="generate_answers",
         config=cfg
@@ -337,7 +338,7 @@ def triviaqa_postprocess(model_name, raw_answers):
 
 
 def load_winobias(dev_or_test):
-    data = pd.read_csv(f'../data/winobias_{dev_or_test}.csv')
+    data = pd.read_csv(f'data/winobias_{dev_or_test}.csv')
     return (data['sentence'], data['q'], data['q_instruct']), data['answer'], data['incorrect_answer'], data['stereotype'], data['type']
 
 def winobias_preprocess(model_name, all_questions, labels):
@@ -351,7 +352,7 @@ def winobias_preprocess(model_name, all_questions, labels):
 
 def load_hotpotqa(split, with_context):
 
-    dataset = load_dataset("hotpot_qa", 'distractor')
+    dataset = load_dataset("/GLOBALFS/nudt_dwfeng_1/zyq/data/datasets/hotpot_qa")
     subset_indices = np.random.randint(0, len(dataset[split]), 10000)
     all_questions = [dataset[split][int(x)]['question'] for x in subset_indices]
     labels = [dataset[split][int(x)]['answer'] for x in subset_indices]
@@ -465,8 +466,8 @@ def main():
     init_wandb(args)
     set_seed(0)
     dataset_size = args.n_samples
-
-    model, tokenizer = load_model_and_validate_gpu(args.model)
+    model_path = LIST_OF_MODELS_PATH[args.model]
+    model, tokenizer = load_model_and_validate_gpu(model_path)
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
     stop_token_id = None
@@ -474,12 +475,12 @@ def main():
         stop_token_id = tokenizer.encode('\n', add_special_tokens=False)[-1]
     all_questions, context, labels, max_new_tokens, origin, preprocess_fn, stereotype, type_, wrong_labels = load_data(args.dataset)
 
-    if not os.path.exists('../output'):
-        os.makedirs('../output')
+    if not os.path.exists('output'):
+        os.makedirs('output')
 
-    file_path_output_ids = f"../output/{MODEL_FRIENDLY_NAMES[args.model]}-input_output_ids-{args.dataset}.pt"
-    file_path_scores = f"../output/{MODEL_FRIENDLY_NAMES[args.model]}-scores-{args.dataset}.pt"
-    file_path_answers = f"../output/{MODEL_FRIENDLY_NAMES[args.model]}-answers-{args.dataset}.csv"
+    file_path_output_ids = f"output/{MODEL_FRIENDLY_NAMES[args.model]}-input_output_ids-{args.dataset}.pt"
+    file_path_scores = f"output/{MODEL_FRIENDLY_NAMES[args.model]}-scores-{args.dataset}.pt"
+    file_path_answers = f"output/{MODEL_FRIENDLY_NAMES[args.model]}-answers-{args.dataset}.csv"
 
     if dataset_size:
         all_questions = all_questions[:dataset_size]
@@ -537,9 +538,9 @@ def main():
     print("Saving input output ids to ", file_path_output_ids)
     torch.save(input_output_ids, file_path_output_ids)
 
-    print("Saving input output ids to ", file_path_scores)
-    torch.save({"all_scores": all_scores,
-                "all_output_ids": all_output_ids}, file_path_scores)
+    # print("Saving input output ids to ", file_path_scores)
+    # torch.save({"all_scores": all_scores,
+    #             "all_output_ids": all_output_ids}, file_path_scores)
 
 if __name__ == "__main__":
     main()

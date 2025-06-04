@@ -1,6 +1,6 @@
 import argparse
 import sys
-
+import os
 import numpy as np
 import wandb
 from sklearn.utils import resample
@@ -14,7 +14,7 @@ import torch
 from tqdm import tqdm
 
 from probing_utils import load_model_and_validate_gpu, tokenize, generate, LIST_OF_MODELS, MODEL_FRIENDLY_NAMES, \
-    LIST_OF_TEST_DATASETS, LIST_OF_DATASETS
+    LIST_OF_TEST_DATASETS, LIST_OF_DATASETS,LIST_OF_MODELS_PATH
 
 
 def parse_args():
@@ -28,6 +28,7 @@ def parse_args():
     parser.add_argument("--model", choices=LIST_OF_MODELS, default='mistralai/Mistral-7B-Instruct-v0.2', help="model which answers are to be extracted")
 
     args = parser.parse_args()
+    os.environ["WANDB_MODE"] = "offline"
     wandb.init(
         project="extract_exact_answer",
         config=vars(args)
@@ -98,7 +99,7 @@ def extract_exact_answer(model, tokenizer, correctness, question, model_answer, 
         print("###")
         while valid == 0 and retries < 5:
             with torch.no_grad():
-                model_output = generate(model_input, model, model_name, sample, False)
+                model_output = generate(model_input, model, model_name, sample, False,tokenizer=tokenizer)
                 exact_answer = tokenizer.decode(model_output['sequences'][0][len(model_input[0]):])
             if 'mistral' in model_name.lower():
                 exact_answer = exact_answer.replace(".</s>", "").replace("</s>", "").split('\n')[0].split("(")[
@@ -109,7 +110,6 @@ def extract_exact_answer(model, tokenizer, correctness, question, model_answer, 
             else:
                 print("Model is not supported. Exisitng...")
                 exit(1)
-
             if type(model_answer) == float:
                 exact_answer = "NO ANSWER"
                 valid = 0
@@ -124,13 +124,14 @@ def extract_exact_answer(model, tokenizer, correctness, question, model_answer, 
 
 def main():
     args = parse_args()
-    model, tokenizer = load_model_and_validate_gpu(args.extraction_model)
-    source_file = f"../output/{MODEL_FRIENDLY_NAMES[args.model]}-answers-{args.dataset}.csv"
-    resampling_file = f"../output/resampling/{MODEL_FRIENDLY_NAMES[args.model]}_{args.dataset}_{args.do_resampling}_textual_answers.pt"
+    model_path = LIST_OF_MODELS_PATH[args.extraction_model]
+    model, tokenizer = load_model_and_validate_gpu(model_path)
+    source_file = f"mnli/{MODEL_FRIENDLY_NAMES[args.model]}-answers-{args.dataset}.csv"
+    resampling_file = f"output/resampling/{MODEL_FRIENDLY_NAMES[args.model]}_{args.dataset}_{args.do_resampling}_textual_answers.pt"
     if args.do_resampling > 0:
-        destination_file = f"../output/resampling/{MODEL_FRIENDLY_NAMES[args.model]}_{args.dataset}_{args.do_resampling}_exact_answers.pt"
+        destination_file = f"output/resampling/{MODEL_FRIENDLY_NAMES[args.model]}_{args.dataset}_{args.do_resampling}_exact_answers.pt"
     else:
-        destination_file = f"../output/{MODEL_FRIENDLY_NAMES[args.model]}-answers-{args.dataset}.csv"
+        destination_file = f"mnli/{MODEL_FRIENDLY_NAMES[args.model]}-answers-{args.dataset}.csv"
 
     model_answers = pd.read_csv(source_file)
     print(f"Length of data: {len(model_answers)}")
@@ -210,7 +211,7 @@ def main():
         if args.do_resampling <= 0:
             model_answers['exact_answer'] = exact_answers
             model_answers['valid_exact_answer'] = valid_lst
-            model_answers.to_csv(destination_file)
+            model_answers.to_csv(f"output/{MODEL_FRIENDLY_NAMES[args.model]}-answers-{args.dataset}_all_prompt.csv")
         else:
             torch.save({
                 "exact_answer": exact_answers,

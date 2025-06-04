@@ -4,6 +4,7 @@ from collections import defaultdict
 import numpy as np
 import pandas as pd
 import torch
+import torch.nn.functional as F
 import transformers
 from baukit import TraceDict
 from datasets import load_dataset
@@ -59,15 +60,22 @@ HIDDEN_SIZE = {
 }
 
 LIST_OF_DATASETS = ['triviaqa',
+                    'triviaqa_test',
                     'imdb',
                     'winobias',
                     'hotpotqa',
+                    'hotpotqa_test',
                     'hotpotqa_with_context',
                     'math',
                     'movies',
+                    'movies_test',
                     'mnli',
+                    'mnli_test',
                     'natural_questions_with_context',
-                    'winogrande']
+                    'winogrande',
+                    'winogrande_test',
+                    'math_test'
+                    ]
 
 LIST_OF_TEST_DATASETS = [f"{x}_test" for x in LIST_OF_DATASETS]
 
@@ -76,7 +84,10 @@ LIST_OF_MODELS = ['mistralai/Mistral-7B-Instruct-v0.2',
                                             'meta-llama/Meta-Llama-3-8B',
                                             'meta-llama/Meta-Llama-3-8B-Instruct',
                                             ]
-
+LIST_OF_MODELS_PATH={
+    'meta-llama/Meta-Llama-3-8B-Instruct':'/GLOBALFS/nudt_dwfeng_1/zyq/data/models/LLM-Research/Meta-Llama-3-8B-Instruct',
+    'mistralai/Mistral-7B-Instruct-v0.2':'/GLOBALFS/nudt_dwfeng_1/zyq/data/models/AI-ModelScope/Mistral-7B-Instruct-v0.2'
+}
 MODEL_FRIENDLY_NAMES = {
     'mistralai/Mistral-7B-Instruct-v0.2': 'mistral-7b-instruct',
     'mistralai/Mistral-7B-v0.3': 'mistral-7b',
@@ -114,7 +125,7 @@ def generate(model_input, model, model_name, do_sample=False, output_scores=Fals
     if stop_token_id is not None:
         eos_token_id = stop_token_id
     else:
-        eos_token_id = None
+        eos_token_id = tokenizer.eos_token_id
 
     model_output = model.generate(model_input,
                                   max_new_tokens=max_new_tokens, output_hidden_states=output_hidden_states,
@@ -266,6 +277,90 @@ def get_attention_output(model, ret, layers_to_trace, probe_at):
 
 
     return attention_output_per_layer
+# def get_token_index_of_sentence_by_js(model,output,token, tokenizer, question, model_name, full_answer_tokenized=None, exact_answer=None,
+#                     exact_answer_valid=None, use_dict=True):
+#     if (type(token) == str) and ('exact' in token):
+#         if exact_answer_is_valid(exact_answer_valid, exact_answer):
+#             if (not use_dict) or (question not in exact_tokens_dict):
+#                 t = get_indices_of_exact_answer(tokenizer, full_answer_tokenized, exact_answer, model_name, prompt=question)
+#                 exact_tokens_dict[question] = t
+#             else:
+#                 t = exact_tokens_dict[question]
+#     last_index = None
+#     value = 128007
+#     indices = torch.where(full_answer_tokenized==value)[0]
+#     if len(indices) > 0:
+#         last_index = indices.max().item()
+#     else:
+#         last_index = -1
+#     # messages = [17666 277
+#     #     {"role": "user", "content": question}
+#     # ]
+#     # model_input = tokenizer.apply_chat_template(messages, return_tensors="pt").to('cuda')
+#     #
+#     from transformers.generation.utils import LogitsProcessorList
+#     logits_processor = LogitsProcessorList()
+#     output_hidden = model(full_answer_tokenized.unsqueeze(0).cuda(0),return_dict=True,output_hidden_states=True).hidden_states
+#     lm_head = model.get_output_embeddings()
+#     norm = model.model.norm
+#
+#
+#     tokens = tokenizer.convert_ids_to_tokens(full_answer_tokenized)
+#     key_words_norm_2 = []
+#     other_norm_2 = []
+#     mature_logits =lm_head(norm(output_hidden[-1].cuda(0)))
+#     mature_logits =logits_processor(full_answer_tokenized, mature_logits)
+#     output_csv = {}
+#     for k in range(last_index,output[0].shape[0]):
+#         temp = tokens[k]
+#         output_csv[temp] = []
+#     js_divs_list_layer=[]
+#     js_divs_list_layer.append(tokens[last_index:output[0].shape[0]])
+#     for i in range(1,32):
+#         temp_logits = lm_head(norm(output_hidden[i].cuda(0)))
+#         temp_logits=logits_processor(full_answer_tokenized, temp_logits)
+#         js_divs_list = []
+#         for j in range(last_index,output[0].shape[0]):
+#             token_temp_logit = temp_logits[0][j]
+#             token_mature_logit = mature_logits[0][j]
+#             top_kmature_scores, top_k_indices = torch.topk(token_mature_logit, 100)
+#             top_kmature_scores = torch.tensor([1.0,1.0,5.0,6.0,7.0,8.0])
+#             top_ktemp_scores = torch.tensor([0.5, 0.5, 0.5, 0.5, 0.5, 0.5])
+#             # top_ktemp_scores=token_temp_logit[top_k_indices]
+#
+#             softmax_mature_layer = F.softmax(top_kmature_scores,
+#                                              dim=-1)  # shape: (batch_size, num_features)
+#             softmax_premature_layers = F.softmax(top_ktemp_scores,
+#                                                  dim=-1)  # shape: (num_premature_layers, batch_size, num_features)
+#             #  softmax_mature_layers = softmax_mature_layer.unsqueeze(0)
+#             #  softmax_get_layers = torch.cat((softmax_premature_layers,softmax_mature_layers),dim=0)
+#             # 3. Calculate M, the average distribution
+#             M = 0.5 * (softmax_mature_layer+ softmax_premature_layers)  # shape: (num_premature_layers, batch_size, num_features)
+#
+#             # 4. Calculate log-softmax for the KL divergence
+#             log_softmax_mature_layer = F.log_softmax(top_kmature_scores,
+#                                                      dim=-1)  # shape: (batch_size, num_features)
+#             log_softmax_premature_layers = F.log_softmax(top_ktemp_scores,
+#                                                          dim=-1)  # shape: (num_premature_layers, batch_size, num_features)
+#
+#             # 5. Calculate the KL divergences and then the JS divergences
+#             kl1 = F.kl_div(log_softmax_mature_layer, M, reduction='none').mean(
+#                 -1)  # shape: (num_premature_layers, batch_size)
+#             kl2 = F.kl_div(log_softmax_premature_layers, M, reduction='none').mean(
+#                 -1)  # shape: (num_premature_layers, batch_size)
+#             js_divs = 0.5 * (kl1 + kl2)  # shape: (num_premature_layers, batch_size)
+#
+#             # 6. Reduce the batchmean
+#             js_divs = js_divs.mean(-1)
+#             js_divs_list.append(js_divs.cpu().item())
+#         js_divs_list_layer.append(js_divs_list)
+#     import csv
+#     with open("1.csv","w",newline="") as f:
+#         writer = csv.writer(f)
+#         writer.writerows(js_divs_list_layer)
+#     print("test")
+#     print(f"lsyer:{i}key js: {np.mean(key_words_norm_2)},other_js: {np.mean(other_norm_2)}")
+#     print("its all done")
 
 
 def extract_internal_reps_specific_layer_and_token(model, tokenizer, prompts, input_output_ids_lst,
@@ -275,16 +370,27 @@ def extract_internal_reps_specific_layer_and_token(model, tokenizer, prompts, in
     length = len(input_output_ids_lst)
     print(
         f"Extracting internal reps from layer {layer} and token {token} from {length} textual inputs...")
-
+    rep_tensor = None
     for idx, (input_output_ids, prompt, exact_answer, exact_answer_valid) in tqdm(enumerate(zip(input_output_ids_lst, prompts, exact_answers, exact_answers_valid))):
 
         output = extract_internal_reps_single_sample(model, input_output_ids, probe_at, model_name)
+        # t=get_token_index_of_sentence_by_js(model,output,token, tokenizer, prompt, model_name, input_output_ids,
+        #                      exact_answer, exact_answer_valid, use_dict=use_dict_for_tokens)
         t = get_token_index(token, tokenizer, prompt, model_name, input_output_ids,
                             exact_answer, exact_answer_valid, use_dict=use_dict_for_tokens)
-        rep = output[layer][t].float().numpy()
-        all_reps.append(rep)
 
-    return all_reps
+        # rep = output[layer][t].float().numpy()
+
+        rep_list=[]
+        for i in output:
+            rep_list.append(i[t])
+        temp = torch.stack(rep_list).unsqueeze(0)
+        if rep_tensor is None:
+            rep_tensor = temp
+        else:
+            rep_tensor = torch.cat([rep_tensor, temp], dim=0)
+
+    return rep_tensor
 
 
 def extract_internal_reps_all_layers_and_tokens(model, input_output_ids_lst, probe_at, model_name):
@@ -307,12 +413,40 @@ def load_model_and_validate_gpu(model_path, tokenizer_path=None):
     tokenizer = AutoTokenizer.from_pretrained(tokenizer_path)
     print("Started loading model")
     model = AutoModelForCausalLM.from_pretrained(model_path, device_map='auto',
-                                                 torch_dtype=torch.bfloat16, low_cpu_mem_usage=True)
+                                                 torch_dtype=torch.bfloat16)
     assert ('cpu' not in model.hf_device_map.values())
     return model, tokenizer
+def test_classifier_lstm(model, X_test, y_test, pos_label=0, predicted_probas=None,start_end=[]):
+    y_valid=torch.FloatTensor(y_test.reshape(-1, 1))
+    X_valid=X_test[:,start_end[0]:start_end[1]].float().to("cuda")
+    model.eval()
+    if predicted_probas is None:
+        baseline_acc = max(y_valid.mean(), (1-y_valid).mean())
+        pred = model.predict(X_valid).detach().cpu()
+        acc = (pred == y_valid).float().mean()
+        acc_diff_from_baseline = acc - baseline_acc
+        precision = precision_score(y_valid, pred)
+        recall = recall_score(y_valid, pred)
+        f1 = f1_score(y_valid, pred)
+        predicted_probas = model(X_valid).detach().cpu()
+    else:
+        baseline_acc = None
+        acc = None
+        acc_diff_from_baseline = None
+        precision = None
+        recall = None
+        f1 = None
 
+    fpr_for_auc, tpr_for_auc, thresholds = metrics.roc_curve(y_valid.detach(), torch.sigmoid(predicted_probas))
+    auc = metrics.auc(fpr_for_auc, tpr_for_auc)
+    print("acc_diff_from_baseline: {},f1: {}, precision: {}, recall: {}, auc: {}, baseline_acc: {}, acc: {}".format(
+        acc_diff_from_baseline, f1, precision, recall, auc, baseline_acc,
+        acc))
+    return {"acc_diff_from_baseline": acc_diff_from_baseline.tolist(), "f1": f1.tolist(), "precision": precision.tolist(), "recall": recall.tolist(),
+            "auc": auc.tolist(), "baseline_acc": baseline_acc.tolist(), "acc": acc.tolist()}
 
 def compute_metrics_probing(clf, X_valid, y_valid, pos_label=0, predicted_probas=None):
+    pos_label=1
     if predicted_probas is None:
         baseline_acc = max(y_valid.mean(), (1-y_valid).mean())
         pred = clf.predict(X_valid)
@@ -333,9 +467,11 @@ def compute_metrics_probing(clf, X_valid, y_valid, pos_label=0, predicted_probas
 
     fpr_for_auc, tpr_for_auc, thresholds = metrics.roc_curve(y_valid, predicted_probas, pos_label=pos_label)
     auc = metrics.auc(fpr_for_auc, tpr_for_auc)
-
-    return {"acc_diff_from_baseline": acc_diff_from_baseline, "f1": f1, "precision": precision, "recall": recall,
-            "auc": auc, "baseline_acc": baseline_acc, "acc": acc}
+    print("acc_diff_from_baseline: {},f1: {}, precision: {}, recall: {}, auc: {}, baseline_acc: {}, acc: {}".format(
+        acc_diff_from_baseline, f1, precision, recall, auc, baseline_acc,
+        acc))
+    return {"acc_diff_from_baseline": acc_diff_from_baseline.tolist(), "f1": f1.tolist(), "precision": precision.tolist(), "recall": recall.tolist(),
+            "auc": auc.tolist(), "baseline_acc": baseline_acc.tolist(), "acc": acc.tolist()}
 
 
 def probe_specific_layer_token(extracted_embeddings_train, extracted_embeddings_valid, layer, token, questions_train,
@@ -359,6 +495,7 @@ def probe_specific_layer_token(extracted_embeddings_train, extracted_embeddings_
 
 
 def compile_probing_indices(data, n_samples, seed, n_validation_samples=0):
+
     n_samples = eval(n_samples)
     indices = np.arange(len(data))
 

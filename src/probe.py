@@ -15,7 +15,7 @@ from transformers import set_seed
 
 from probing_utils import extract_internal_reps_specific_layer_and_token, compile_probing_indices, \
     load_model_and_validate_gpu, get_probing_layer_names, LIST_OF_DATASETS, LIST_OF_MODELS, \
-    MODEL_FRIENDLY_NAMES, LIST_OF_PROBING_LOCATIONS, compute_metrics_probing, prepare_for_probing
+    MODEL_FRIENDLY_NAMES, LIST_OF_PROBING_LOCATIONS, compute_metrics_probing, prepare_for_probing,LIST_OF_MODELS_PATH
 
 
 def parse_args_and_init_wandb():
@@ -34,7 +34,7 @@ def parse_args_and_init_wandb():
     parser.add_argument("--test_dataset", choices=LIST_OF_DATASETS, required=False, default=None)
 
     args = parser.parse_args()
-
+    os.environ["WANDB_MODE"] = "offline"
     if args.test_dataset is None:
         wandb.init(
             project="probe_hallucinations_specific",
@@ -51,7 +51,7 @@ def parse_args_and_init_wandb():
 def probe(model, tokenizer, data, input_output_ids, token, layer, probe_at, seeds,
               model_name, dataset_name, n_samples,
           data_test=None, input_output_ids_test=None, clf=None):
-
+    output_file_path = f"train/{dataset_name}/"
     train_clf = clf is None
 
     # Data preprocessing
@@ -61,32 +61,43 @@ def probe(model, tokenizer, data, input_output_ids, token, layer, probe_at, seed
         data, input_output_ids, np.arange(len(data)) if n_samples == 'all' else np.arange(min(len(data), int(n_samples))), [])
     X_train_valid = None
     if train_clf:
-        X_train_valid = \
-            extract_internal_reps_specific_layer_and_token(model, tokenizer, questions_train_valid,
-                                                           input_output_ids_train_valid, probe_at, model_name,
-                                                           layer, token, exact_answer_train_valid,
-                                                           validity_of_exact_answer_train_valid,
-                                                           )
-        X_train_valid = np.array(X_train_valid)
+        output_file_path_train = output_file_path + f"train-{token}.pt"
+        if os.path.isfile(output_file_path_train):
+            X_train_valid = torch.load(output_file_path_train)
+        else:
+            X_train_valid = \
+                extract_internal_reps_specific_layer_and_token(model, tokenizer, questions_train_valid,
+                                                               input_output_ids_train_valid, probe_at, model_name,
+                                                               layer, token, exact_answer_train_valid,
+                                                               validity_of_exact_answer_train_valid
+                                                               )
+
+            torch.save(X_train_valid, output_file_path_train)
+
+        X_train_valid = np.array(X_train_valid.float())[:,layer]
+
 
     X_test = None
     y_test = None
     if data_test is not None:
         test_data_indices = data_test.index
-        if 'exact_answer' in data:
-            test_data_indices = test_data_indices[
-                (data_test.iloc[test_data_indices]['valid_exact_answer'] == 1) & (
-                            data_test.iloc[test_data_indices]['exact_answer'] != 'NO ANSWER') & (
-                            data_test.iloc[test_data_indices]['exact_answer'].map(lambda x: type(x)) == str)]
+
 
         _, _, input_output_ids_test, _, y_test, _, \
             exact_answer_test, _, validity_of_exact_answer_test, _, \
             questions_test, _ = prepare_for_probing(
             data_test, input_output_ids_test, test_data_indices, [])
-        X_test = extract_internal_reps_specific_layer_and_token(model, tokenizer, questions_test,
-                                                                input_output_ids_test, probe_at, model_name, layer,
-                                                                token,
-                                                                exact_answer_test, validity_of_exact_answer_test)
+        output_file_path_test = output_file_path + f"test-{token}.pt"
+        if os.path.isfile(output_file_path_test):
+            X_test = torch.load(output_file_path_test)
+        else:
+            X_test = extract_internal_reps_specific_layer_and_token(model, tokenizer, questions_test,
+                                                                    input_output_ids_test, probe_at, model_name, layer,
+                                                                    token,
+                                                                    exact_answer_test, validity_of_exact_answer_test)
+
+            torch.save(X_test, output_file_path_test)
+        X_test= np.array(X_test.float())[:,layer]
 
     valid_metrics_per_seed = defaultdict(list)
     test_metrics_per_seed = defaultdict(list)
@@ -98,6 +109,7 @@ def probe(model, tokenizer, data, input_output_ids, token, layer, probe_at, seed
         training_data_indices, validation_data_indices = compile_probing_indices(data_train_valid, n_samples,
                                                                                  seed,
                                                                                  n_validation_samples=n_validation_samples)
+
         if train_clf:
             clf = init_and_train_classifier(seed, X_train_valid, y_train_valid)
             clf_only_train = init_and_train_classifier(seed, X_train_valid[training_data_indices],
@@ -108,15 +120,29 @@ def probe(model, tokenizer, data, input_output_ids, token, layer, probe_at, seed
                 valid_metrics_per_seed[k].append(valid_metrics_for_seed[k])
 
         if data_test is not None:
-            X_test_, y_test_ = resample(X_test, y_test, random_state=seed)
+            print("test")
+            if 'exact_answer' in data:
+                test_data_indices = test_data_indices[
+                    (data_test.iloc[test_data_indices]['valid_exact_answer'] == 1) & (
+                            data_test.iloc[test_data_indices]['exact_answer'] != 'NO ANSWER') & (
+                            data_test.iloc[test_data_indices]['exact_answer'].map(lambda x: type(x)) == str)]
+            X_test_, y_test_ = resample(X_test[test_data_indices], y_test[test_data_indices], random_state=seed)
             test_metrics_for_seed = compute_metrics_probing(clf, X_test_, y_test_)
             for k in test_metrics_for_seed:
                 test_metrics_per_seed[k].append(test_metrics_for_seed[k])
 
+
     # compute mean, std per metric
     valid_metrics_aggregated = aggregate_metrics_across_seeds(valid_metrics_per_seed)
     test_metrics_aggregated = aggregate_metrics_across_seeds(test_metrics_per_seed)
-
+    import json
+    save_path_base=f"train/{dataset_name}/baseline"
+    if not os.path.exists(save_path_base):
+        os.makedirs(save_path_base)
+    with open(f"{save_path_base}/wandb_summary.json", "w") as f:
+        json.dump(test_metrics_aggregated, f, indent=4)
+    print(f"Summary saved to {save_path_base}/wandb_summary.json")
+    return valid_metrics_aggregated, test_metrics_aggregated, clf
     return valid_metrics_aggregated, test_metrics_aggregated, clf
 
 
@@ -134,9 +160,9 @@ def init_and_train_classifier(seed, X_train, y_train):
 
 
 def get_saved_clf_if_exists(args):
-    if not exists("../checkpoints"):
-        os.makedirs("../checkpoints")
-    save_path = f"../checkpoints/clf_{MODEL_FRIENDLY_NAMES[args.model]}_{args.dataset}_layer-{args.layer}_token-{args.token}.pkl"
+    if not exists("checkpoints"):
+        os.makedirs("checkpoints")
+    save_path = f"checkpoints/clf_{MODEL_FRIENDLY_NAMES[args.model]}_{args.dataset}_layer-{args.layer}_token-{args.token}.pkl"
     print("Loading classifier from ", save_path)
 
     if exists(save_path):
@@ -151,26 +177,26 @@ def get_saved_clf_if_exists(args):
 
 def main():
     args = parse_args_and_init_wandb()
-
-    model, tokenizer = load_model_and_validate_gpu(args.model)
-
+    model_path=LIST_OF_MODELS_PATH[args.model]
+    model, tokenizer = load_model_and_validate_gpu(model_path)
     data_test = None
+    args.save_clf=True
     input_output_ids_test = None
-    model_output_file = f"../output/{MODEL_FRIENDLY_NAMES[args.model]}-answers-{args.dataset}.csv"
+    model_output_file = f"{args.dataset}/{MODEL_FRIENDLY_NAMES[args.model]}-answers-{args.dataset}.csv"
     data = pd.read_csv(model_output_file).reset_index()
     input_output_ids = torch.load(
-        f"../output/{MODEL_FRIENDLY_NAMES[args.model]}-input_output_ids-{args.dataset}.pt")
+        f"output/{MODEL_FRIENDLY_NAMES[args.model]}-input_output_ids-{args.dataset}.pt")
 
     if args.test_dataset is not None:
         test_dataset = args.test_dataset
     else:
         test_dataset = args.dataset
-    model_output_file_test = f"../output/mistral-7b-instruct-answers-{test_dataset}_test.csv"
+    model_output_file_test = f"{args.dataset}/{MODEL_FRIENDLY_NAMES[args.model]}-answers-{args.dataset}_test.csv"
     load_test = False
     if os.path.isfile(model_output_file_test):
         data_test = pd.read_csv(model_output_file_test)
         input_output_ids_test = torch.load(
-            f"../output/{MODEL_FRIENDLY_NAMES[args.model]}-input_output_ids-{test_dataset}_test.pt")
+            f"output/{MODEL_FRIENDLY_NAMES[args.model]}-input_output_ids-{test_dataset}_test.pt")
         load_test = True
 
     if args.save_clf:
