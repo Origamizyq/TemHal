@@ -143,7 +143,7 @@ def probe(model, tokenizer, data, input_output_ids, token, layer, probe_at, seed
         json.dump(test_metrics_aggregated, f, indent=4)
     print(f"Summary saved to {save_path_base}/wandb_summary.json")
     return valid_metrics_aggregated, test_metrics_aggregated, clf
-    return valid_metrics_aggregated, test_metrics_aggregated, clf
+
 
 
 def aggregate_metrics_across_seeds(metrics_per_seed):
@@ -178,14 +178,14 @@ def get_saved_clf_if_exists(args):
 def main():
     args = parse_args_and_init_wandb()
     model_path=LIST_OF_MODELS_PATH[args.model]
-    model, tokenizer = load_model_and_validate_gpu(model_path)
+    # model, tokenizer = load_model_and_validate_gpu(model_path)
     data_test = None
     args.save_clf=True
     input_output_ids_test = None
     model_output_file = f"{args.dataset}/{MODEL_FRIENDLY_NAMES[args.model]}-answers-{args.dataset}.csv"
     data = pd.read_csv(model_output_file).reset_index()
     input_output_ids = torch.load(
-        f"output/{MODEL_FRIENDLY_NAMES[args.model]}-input_output_ids-{args.dataset}.pt")
+        f"{args.dataset}/{MODEL_FRIENDLY_NAMES[args.model]}-input_output_ids-{args.dataset}.pt")
 
     if args.test_dataset is not None:
         test_dataset = args.test_dataset
@@ -196,7 +196,7 @@ def main():
     if os.path.isfile(model_output_file_test):
         data_test = pd.read_csv(model_output_file_test)
         input_output_ids_test = torch.load(
-            f"output/{MODEL_FRIENDLY_NAMES[args.model]}-input_output_ids-{test_dataset}_test.pt")
+            f"{args.dataset}/{MODEL_FRIENDLY_NAMES[args.model]}-input_output_ids-{test_dataset}_test.pt")
         load_test = True
 
     if args.save_clf:
@@ -204,7 +204,8 @@ def main():
     else:
         save_clf = False
         clf = None
-
+    model=None
+    tokenizer=None
     res = probe(model, tokenizer, data, input_output_ids, args.token,
                                                    args.layer, args.probe_at, args.seeds, args.model, args.dataset,
                                                     args.n_samples, data_test, input_output_ids_test, clf)

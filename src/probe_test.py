@@ -73,7 +73,6 @@ class UniLSTMAttention(nn.Module):
             hidden_size=lstm_hidden,
             num_layers=1,  # 单层简化
             batch_first=True,
-            dropout=0.2
         )
 
         # 注意力机制
@@ -183,7 +182,7 @@ def evaluate(model, dataloader, criterion):
     return total_loss / len(dataloader), correct / len(dataloader.dataset),np.array(auc_eval).mean()
 # 训练循环
 
-def init_and_train_classifier_lstm(if_save,X_train, y_train,path,X_test_, y_test_,start_end=[]):
+def init_and_train_classifier_lstm(if_save,X_train, y_train,path,X_test_, y_test_,start_end=[],attens_flag=False):
     data={}
     train_losses = []
     val_losses = []
@@ -195,8 +194,11 @@ def init_and_train_classifier_lstm(if_save,X_train, y_train,path,X_test_, y_test
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     y_train=torch.FloatTensor(y_train.reshape(-1, 1))
     X_train=X_train[:,start_end[0]:start_end[1]].float()
-    model = LSTMAttentionClassifier().to(device)
-    #model = LSTMBinaryClassifier(input_size=4096, hidden_size=256, num_layers=1).to(device)
+    if attens_flag:
+        model = UniLSTMAttention().to(device)
+        print("atten_model")
+    else:
+        model = LSTMBinaryClassifier(input_size=4096, hidden_size=256, num_layers=1).to(device)
     criterion = nn.BCEWithLogitsLoss()  # 内置Sigmoid，适用于二元分类
     optimizer = torch.optim.Adam(model.parameters(), lr=0.0001, weight_decay=1e-4)  # L2正则化
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', patience=2)
@@ -209,7 +211,7 @@ def init_and_train_classifier_lstm(if_save,X_train, y_train,path,X_test_, y_test
     best_model_weights = None
     best_val_loss = np.inf
     patience_counter = 0
-    patience = 5
+    patience = 3
     min_delta=0.001
     for epoch in tqdm(range(num_epochs)):
         train_loss = train_epoch(model, train_loader, criterion, optimizer)
@@ -232,7 +234,7 @@ def init_and_train_classifier_lstm(if_save,X_train, y_train,path,X_test_, y_test
         print(f"Epoch {epoch}:")
         print(f"  Train Loss: {train_loss:.4f} | Val Loss: {val_loss:.4f} | Val Acc: {val_acc:.4f} | Val AUC: {val_auc:.4f}" )
     torch.save(best_model_weights, path + "train.pth")
-    model.load_state_dict(best_model_weights)
+    # model.load_state_dict(best_model_weights)
 
     # 保存最佳模型
     data["train_losses"]=train_losses
@@ -310,7 +312,12 @@ def probe_lstm(model, tokenizer, data, input_output_ids, token, layer, probe_at,
             torch.save(X_test, output_file_path_test)
     valid_metrics_per_seed = defaultdict(list)
     test_metrics_per_seed = defaultdict(list)
-
+    pos_label = 0
+    attens_flag = False
+    path_atten_model = ""
+    if attens_flag:
+        path_atten_model = "attens_"
+        print("atten_model")
     for seed in seeds:
         print(f"##### {seed} #####")
         set_seed(seed)
@@ -320,11 +327,11 @@ def probe_lstm(model, tokenizer, data, input_output_ids, token, layer, probe_at,
                                                                 n_validation_samples=n_validation_samples)
 
 
-        train_clf=False
+
         if train_clf:
             start_end = [0,16]
-            print("atten_model")
-            save_path_base = f"train/{dataset_name}/attens_models_{start_end[0]}-{start_end[1]}/"
+
+            save_path_base = f"train/{dataset_name}/{path_atten_model}models_{start_end[0]}-{start_end[1]}/"
             save_path = save_path_base+f"{seed}/"
             if not os.path.exists(save_path):
                 os.makedirs(save_path)
@@ -334,9 +341,18 @@ def probe_lstm(model, tokenizer, data, input_output_ids, token, layer, probe_at,
 
 
             if not only_train:
+                test_data_indices = test_data_indices[
+                    (data_test.iloc[test_data_indices]['valid_exact_answer'] == 1) & (
+                            data_test.iloc[test_data_indices]['exact_answer'] != 'NO ANSWER') & (
+                            data_test.iloc[test_data_indices]['exact_answer'].map(lambda x: type(x)) == str)]
                 X_test_, y_test_ = resample(X_test[test_data_indices], y_test[test_data_indices], random_state=seed)
-                clf = init_and_train_classifier_lstm(if_save, X_train_valid[sample_number], y_train_valid[sample_number],save_path+f"all-",X_test_, y_test_,start_end)
-                test_metrics_for_seed_all = test_classifier_lstm(clf, X_test_, y_test_,start_end=start_end)
+
+                #clf = init_and_train_classifier_lstm(if_save, X_train_valid[sample_number], y_train_valid[sample_number],save_path+f"all-",X_test_, y_test_,start_end,attens_flag)
+                device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+                clf = UniLSTMAttention().to(device)
+                # clf = LSTMBinaryClassifier(input_size=4096, hidden_size=256, num_layers=1).to(device)
+                clf.load_state_dict(torch.load(save_path + f"all-train.pth"))
+                test_metrics_for_seed_all = test_classifier_lstm(clf, X_test_, y_test_,start_end=start_end,pos_label=pos_label)
             else:
                 test_data_indices = test_data_indices[
                             (data_test.iloc[test_data_indices]['valid_exact_answer'] == 1) & (
@@ -346,8 +362,9 @@ def probe_lstm(model, tokenizer, data, input_output_ids, token, layer, probe_at,
                 X_test_, y_test_ = resample(X_test[test_data_indices], y_test[test_data_indices], random_state=seed)
                 clf_only_train = init_and_train_classifier_lstm(if_save, X_train_valid[sample_number][training_data_indices],
                                             y_train_valid[sample_number][training_data_indices],save_path,X_test_, y_test_,start_end)
-                test_metrics_for_seed_all=test_classifier_lstm(clf_only_train, X_test_, y_test_,start_end)
+                test_metrics_for_seed_all=test_classifier_lstm(clf_only_train, X_test_, y_test_,start_end,pos_label=pos_label)
             test_metrics_for_seed_all["only_train"]=only_train
+            test_metrics_for_seed_all["pos_lable"]=pos_label
             for k in test_metrics_for_seed_all:
                 test_metrics_per_seed[k].append(test_metrics_for_seed_all[k])
         # if data_test is not None:
@@ -384,7 +401,7 @@ def probe_lstm(model, tokenizer, data, input_output_ids, token, layer, probe_at,
     import json
     with open(f"{save_path_base}/wandb_summary.json", "w") as f:
         json.dump(test_metrics_aggregated, f, indent=4)
-    print(f"Summary saved to {save_path_base}/wandb_summary.json")
+    print(f"Summary saved to {save_path_base}wandb_summary.json")
     return valid_metrics_aggregated, test_metrics_aggregated, clf
 
 
@@ -421,14 +438,14 @@ def get_saved_clf_if_exists(args):
 def main():
     args = parse_args_and_init_wandb()
     model_path=LIST_OF_MODELS_PATH[args.model]
-    #model, tokenizer = load_model_and_validate_gpu(model_path)
-    print(model)
+    # model, tokenizer = load_model_and_validate_gpu(model_path)
+    # print(model)
     data_test = None
     input_output_ids_test = None
     model_output_file = f"{args.dataset}/{MODEL_FRIENDLY_NAMES[args.model]}-answers-{args.dataset}.csv"
     data = pd.read_csv(model_output_file).reset_index()
     input_output_ids = torch.load(
-        f"output/{MODEL_FRIENDLY_NAMES[args.model]}-input_output_ids-{args.dataset}.pt")
+        f"{args.dataset}/{MODEL_FRIENDLY_NAMES[args.model]}-input_output_ids-{args.dataset}.pt")
     # args.save_clf =True
     if args.test_dataset is not None:
         test_dataset = args.test_dataset
@@ -439,7 +456,7 @@ def main():
     if os.path.isfile(model_output_file_test):
         data_test = pd.read_csv(model_output_file_test)
         input_output_ids_test = torch.load(
-            f"output/{MODEL_FRIENDLY_NAMES[args.model]}-input_output_ids-{test_dataset}_test.pt")
+            f"{args.dataset}/{MODEL_FRIENDLY_NAMES[args.model]}-input_output_ids-{test_dataset}_test.pt")
         load_test = True
 
     if args.save_clf:
@@ -447,8 +464,8 @@ def main():
     else:
         save_clf = False
         clf = None
-    model = None
-    tokenizer = None
+    model=None
+    tokenizer=None
     print(args.only_train)
     res = probe_lstm(model, tokenizer, data, input_output_ids, args.token,
                                                    args.layer, args.probe_at, args.seeds, args.model, args.dataset,

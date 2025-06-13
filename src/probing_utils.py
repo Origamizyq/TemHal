@@ -425,9 +425,9 @@ def test_classifier_lstm(model, X_test, y_test, pos_label=0, predicted_probas=No
         pred = model.predict(X_valid).detach().cpu()
         acc = (pred == y_valid).float().mean()
         acc_diff_from_baseline = acc - baseline_acc
-        precision = precision_score(y_valid, pred)
-        recall = recall_score(y_valid, pred)
-        f1 = f1_score(y_valid, pred)
+        precision = precision_score(y_valid, pred, pos_label=pos_label)
+        recall = recall_score(y_valid, pred, pos_label=pos_label)
+        f1 = f1_score(y_valid, pred, pos_label=pos_label)
         predicted_probas = model(X_valid).detach().cpu()
     else:
         baseline_acc = None
@@ -446,9 +446,8 @@ def test_classifier_lstm(model, X_test, y_test, pos_label=0, predicted_probas=No
             "auc": auc.tolist(), "baseline_acc": baseline_acc.tolist(), "acc": acc.tolist()}
 
 def compute_metrics_probing(clf, X_valid, y_valid, pos_label=0, predicted_probas=None):
-    pos_label=1
     if predicted_probas is None:
-        baseline_acc = max(y_valid.mean(), (1-y_valid).mean())
+        baseline_acc = max(y_valid.mean(), (1 - y_valid).mean())
         pred = clf.predict(X_valid)
         acc = (pred == y_valid).mean()
         acc_diff_from_baseline = acc - baseline_acc
